@@ -1,3 +1,6 @@
+# 가상환경
+venv/
+
 # Python
 __pycache__/
 *.py[cod]
