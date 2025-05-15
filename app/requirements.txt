@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+pydantic
+asyncpg
+bcrypt
+python-dotenv
+aiomysql
+redis
+pydantic_settings
+PyJWT
+fastapi-limiter==0.1.5 
+cryptography
