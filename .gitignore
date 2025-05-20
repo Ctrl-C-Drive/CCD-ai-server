@@ -14,7 +14,7 @@ build/
 *.log
 
 # 환경 설정
-.env
+# .env
 .env.*
 
 # 모델 및 데이터

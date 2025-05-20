@@ -23,8 +23,12 @@ from redis.asyncio import Redis
 import os
 
 # 로깅 설정
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uvicorn")
+logger.setLevel(logging.INFO)
+
+app_logger = logging.getLogger(__name__)
+app_logger.setLevel(logging.INFO)
+
 
 class AppState:
     def __init__(self):
@@ -309,7 +313,10 @@ async def signup(user: UserSignupRequest, db=Depends(get_db)):
     try:
         await cursor.execute("SELECT user_id FROM user WHERE user_id = %s", (user.user_id,))
         if await cursor.fetchone():
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "User ID exists")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"errorCode": "E409", "message": "이미 존재하는 사용자입니다."}
+            )
 
         hashed_pw = bcrypt.hashpw(user.password.encode(), bcrypt.gensalt()).decode()
         await cursor.execute(
@@ -317,16 +324,20 @@ async def signup(user: UserSignupRequest, db=Depends(get_db)):
             (user.user_id, hashed_pw, int(datetime.now(timezone.utc).timestamp()))
         )
         await conn.commit()
-        return {"message": "User created"}
+        return {"JoinResult": True}
 
     except Exception as e:
         await conn.rollback()
         logger.error("Signup failed", exc_info=e)
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"errorCode": "E611", "message": "회원가입 처리 중 서버 오류가 발생했습니다."}
+        )
 
 @app.post("/login", dependencies=[Depends(RateLimiter(times=5, minutes=1))])
 async def login(user: UserLoginRequest, db=Depends(get_db)):
     conn, cursor = db
+    logger.info(f"user_id={user.user_id}, password={user.password}")
     try:
         await cursor.execute(
             "SELECT password FROM user WHERE user_id = %s",
@@ -335,7 +346,11 @@ async def login(user: UserLoginRequest, db=Depends(get_db)):
         result = await cursor.fetchone()
 
         if not result or not bcrypt.checkpw(user.password.encode(), result["password"].encode()):
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED)
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={"errorCode": "E401", "detail": "아이디 또는 비밀번호가 잘못되었습니다."}
+            )
+
 
         # 토큰 생성
         access_token = create_access_token(user.user_id)
@@ -358,7 +373,10 @@ async def login(user: UserLoginRequest, db=Depends(get_db)):
 
     except Exception as e:
         logger.error("Login failed", exc_info=e)
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"errorCode": "E610", "detail": "로그인 처리 중 오류가 발생했습니다."}
+        )
 
 @app.post("/refresh", dependencies=[Depends(RateLimiter(times=5, minutes=1))])
 async def refresh_token(request: RefreshTokenRequest, db=Depends(get_db)):

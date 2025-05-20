@@ -6,6 +6,7 @@ services:
     container_name: fastapi-app
     volumes:
       - ./uploads:/app/uploads
+      - ./app:/app
     ports:
       - "8000:8000"
     environment:
@@ -21,10 +22,11 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-    command: [
+    command:
+      [
         "./wait-for-it.sh",
         "mysql-db:3306",
-        "--timeout=60", # 타임아웃 60초로 증가
+        "--timeout=60",
         "--",
         "uvicorn",
         "main:app",
@@ -32,7 +34,9 @@ services:
         "0.0.0.0",
         "--port",
         "8000",
-        "--reload", # 개발용으로 reload 추가
+        "--reload",
+        "--log-level",
+        "info",
       ]
     networks:
       - mynetwork
