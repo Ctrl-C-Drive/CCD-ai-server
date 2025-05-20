@@ -1,0 +1,85 @@
+version: "3.8"
+
+services:
+  fastapi:
+    build: ./app
+    container_name: fastapi-app
+    volumes:
+      - ./uploads:/app/uploads
+    ports:
+      - "8000:8000"
+    environment:
+      DB_HOST: mysql-db # Pydantic 필드명과 일치
+      DB_PORT: 3306
+      DB_USER: root
+      DB_PASSWORD: ${DB_PASSWORD} # .env에서 가져옴
+      DB_NAME: ${DB_NAME} # .env에서 가져옴
+      REDIS_URL: "redis://redis:6379" # 컨테이너 이름으로 직접 지정
+      SECRET_KEY: ${SECRET_KEY}
+    depends_on:
+      mysql-db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    command: [
+        "./wait-for-it.sh",
+        "mysql-db:3306",
+        "--timeout=60", # 타임아웃 60초로 증가
+        "--",
+        "uvicorn",
+        "main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--reload", # 개발용으로 reload 추가
+      ]
+    networks:
+      - mynetwork
+
+  mysql-db:
+    image: mysql:8
+    container_name: mysql-db
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: clipboard_db
+
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"] # localhost로 변경
+      interval: 5s
+      timeout: 10s
+      retries: 10
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql/conf.d:/etc/mysql/conf.d
+      - ./mysql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - mynetwork
+
+  redis:
+    image: redis:alpine
+    container_name: redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+    networks:
+      - mynetwork
+
+  adminer:
+    image: adminer
+    restart: always
+    ports:
+      - 8081:8080
+    networks:
+      - mynetwork
+
+networks:
+  mynetwork:
+    driver: bridge
+
+volumes:
+  mysql_data:
