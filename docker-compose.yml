@@ -4,10 +4,11 @@ services:
   fastapi:
     build: ./app
     container_name: fastapi-app
+    volumes:
+      - ./uploads:/app/uploads
     ports:
       - "8000:8000"
     environment:
-      environment:
       DB_HOST: mysql-db # Pydantic 필드명과 일치
       DB_PORT: 3306
       DB_USER: root
@@ -67,8 +68,14 @@ services:
       retries: 5
     networks:
       - mynetwork
+
+  adminer:
+    image: adminer
+    restart: always
     ports:
-      - "6379:6379"
+      - 8081:8080
+    networks:
+      - mynetwork
 
 networks:
   mynetwork:
