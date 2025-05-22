@@ -18,9 +18,7 @@ build/
 .env.*
 
 # 모델 및 데이터
-*.onnx
 *.pt
-*.pth
 *.h5
 models/
 checkpoints/
