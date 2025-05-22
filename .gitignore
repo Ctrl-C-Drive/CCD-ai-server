@@ -42,6 +42,6 @@ Thumbs.db
 *.pytest_cache/
 
 # 이미지
-.jpeg
-.jpg
-.png
+**/*.jpeg
+**/*.jpg
+**/*.png
