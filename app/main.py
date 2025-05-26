@@ -912,3 +912,10 @@ async def validation_exception_handler(request, exc):
         status_code=422,
         content={"detail": exc.errors()},
     )
+
+# pinecone router 등록
+from api.clip_api import router as clip_router
+from api.search_api import router as search_router
+
+app.include_router(clip_router)
+app.include_router(search_router)
