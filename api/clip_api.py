@@ -10,7 +10,7 @@ load_dotenv()
 
 # 1. Pinecone 초기화
 pinecone.init(
-    api_key="pcsk_4DX7e9_KXt66tnRNAEZ1XEUxNwDgyFiqeyDgoEFV7e8HvWzY6k2hjXF3p8jTL2S2yNowBS",    
+    api_key=os.getenv("PINECONE_API_KEY"),
     environment=os.getenv("PINECONE_ENV")
 )
 
