@@ -13,3 +13,7 @@ cryptography
 aiofiles
 Pillow
 python-multipart
+requests
+torch
+transformers
+pinecone-client==2.2.4

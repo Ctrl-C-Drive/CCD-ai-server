@@ -1,8 +1,8 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
 from clip.koclip_model import encode_image
-import pinecone
 import os
+import pinecone
 from dotenv import load_dotenv
 
 # 0. 환경 변수 로딩
@@ -14,10 +14,7 @@ pinecone.init(
     environment=os.getenv("PINECONE_ENV")
 )
 
-index_name = "image"
-if index_name not in pinecone.list_indexes():
-    raise ValueError(f"Pinecone 인덱스 '{index_name}'가 존재하지 않습니다.")
-index = pinecone.Index(index_name)
+index = pinecone.Index("image")
 
 # 2. FastAPI 라우터 등록
 router = APIRouter()
