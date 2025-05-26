@@ -42,3 +42,8 @@ Thumbs.db
 # Pydantic Cache
 *.mypy_cache/
 *.pytest_cache/
+
+# 이미지
+**/*.png
+**/*.jpg
+**/*.jpeg
