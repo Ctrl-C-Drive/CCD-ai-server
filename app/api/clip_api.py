@@ -20,9 +20,11 @@ index = pinecone.Index("image")
 router = APIRouter()
 
 # 3. 요청 바디 스키마 정의
+
+# 이미지 임베딩 요청 스키마
 class ImageEmbeddingRequest(BaseModel):
-    uuid: str           # 이미지 UUID
-    path: str           # 이미지 실제 경로
+    uuid: str  # 이미지 UUID
+    path: str  # 이미지 실제 경로
 
 @router.post("/vectorize-image")
 def vectorize_image_by_path(data: ImageEmbeddingRequest):
@@ -53,3 +55,12 @@ def vectorize_image_by_path(data: ImageEmbeddingRequest):
         "uuid": image_uuid,
         "path": image_path
     }
+
+# 삭제 요청 스키마
+class DeleteRequest(BaseModel):
+    uuid: str  # 이미지 UUID
+
+@router.post("/delete-image")
+def delete_image_vector(data: DeleteRequest):
+    index.delete(ids=[data.uuid])
+    return {"message": f"{data.uuid} deleted from Pinecone"}
