@@ -22,30 +22,23 @@ router = APIRouter()
 # 3. 요청 바디 스키마
 class TextSearchRequest(BaseModel):
     query: str
-    top_k: int = 5  # 기본값 설정
 
 @router.post("/search-text")
 def search_similar_images(data: TextSearchRequest):
     query = data.query
-    top_k = data.top_k
 
     # 4. KoCLIP 텍스트 임베딩
     vec = encode_text(query).tolist()
 
     # 5. Pinecone에서 유사 벡터 검색
-    result = index.query(vector=vec, top_k=top_k, include_metadata=True)
+    result = index.query(vector=vec, include_metadata=True)
 
     # 6. 결과 가공
     matches = []
     for match in result['matches']:
-        matches.append({
-            "score": match["score"],
-            "uuid": match["id"],
-            "filename": match["metadata"].get("filename"),
-            "path": match["metadata"].get("path"),
-        })
+        matches.append(match["id"])  # ID만 추가
 
     return {
         "query": query,
-        "results": matches
+        "results": matches  # 결과를 ID 리스트로 반환
     }

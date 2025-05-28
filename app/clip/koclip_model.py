@@ -6,7 +6,7 @@ from transformers import CLIPModel, CLIPProcessor
 
 repo = "Bingsu/clip-vit-large-patch14-ko"
 model = CLIPModel.from_pretrained(repo)
-processor = CLIPProcessor.from_pretrained(repo)
+processor = CLIPProcessor.from_pretrained(repo, use_fast=True)
 device = "cpu"
 
 # 텍스트 임베딩 함수
