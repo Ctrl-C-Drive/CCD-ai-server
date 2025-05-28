@@ -4,6 +4,7 @@ FROM python:3.10-slim
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     gcc \
+    dos2unix \
     default-libmysqlclient-dev \
     && rm -rf /var/lib/apt/lists/*
 
@@ -12,8 +13,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY wait-for-it.sh /app/wait-for-it.sh
-RUN chmod +x /app/wait-for-it.sh
-
+RUN dos2unix ./wait-for-it.sh && chmod +x ./wait-for-it.sh
 COPY . /app
 
 # FastAPI 서버 실행
