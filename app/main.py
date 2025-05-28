@@ -22,6 +22,11 @@ from fastapi_limiter import FastAPILimiter
 from redis.asyncio import Redis
 import os
 
+# pinecone router 등록
+from api.clip_api import router as clip_router
+from api.search_api import router as search_router
+
+
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -173,13 +178,20 @@ async def initialize_database():
     async with app_state.db_pool.acquire() as conn:
         async with conn.cursor() as cursor:
             try:
-                await cursor.execute(DROP_TABLES)
-                await cursor.execute(CREATE_TABLES)
+                for statement in DROP_TABLES.strip().split(';'):
+                    stmt = statement.strip()
+                    if stmt:
+                        await cursor.execute(stmt + ';')
+
+                for statement in CREATE_TABLES.strip().split(';'):
+                    stmt = statement.strip()
+                    if stmt:
+                        await cursor.execute(stmt + ';')
+
                 await conn.commit()
             except Exception as e:
                 await conn.rollback()
                 logger.error(f"Database initialization failed: {str(e)}")
-                # 테이블이 이미 존재할 경우 계속 진행
                 if "already exists" not in str(e):
                     raise
 
@@ -231,7 +243,8 @@ os.makedirs(original_dir, exist_ok=True)
 os.makedirs(thumbnail_dir, exist_ok=True)
 app.mount("/images/original", StaticFiles(directory=original_dir), name="original-images")
 app.mount("/images/thumbnail", StaticFiles(directory=thumbnail_dir), name="thumbnail-images")
-
+app.include_router(clip_router)
+app.include_router(search_router)
 
 
 
@@ -913,9 +926,3 @@ async def validation_exception_handler(request, exc):
         content={"detail": exc.errors()},
     )
 
-# pinecone router 등록
-from api.clip_api import router as clip_router
-from api.search_api import router as search_router
-
-app.include_router(clip_router)
-app.include_router(search_router)
