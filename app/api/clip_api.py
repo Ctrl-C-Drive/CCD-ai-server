@@ -22,15 +22,9 @@ router = APIRouter()
 # 3. 요청 바디 스키마 정의
 
 # 이미지 임베딩 요청 스키마
-class ImageEmbeddingRequest(BaseModel):
-    uuid: str  # 이미지 UUID
-    path: str  # 이미지 실제 경로
-
-@router.post("/vectorize-image")
-def vectorize_image_by_path(data: ImageEmbeddingRequest):
-    image_path = data.path
-    image_uuid = data.uuid
-
+# /
+# @router.post("/vectorize-image")
+def vectorize_image_by_path(image_uuid: str, image_path: str):
     if not os.path.exists(image_path):
         return {"error": f"File not found: {image_path}"}
 
@@ -57,10 +51,10 @@ def vectorize_image_by_path(data: ImageEmbeddingRequest):
     }
 
 # 삭제 요청 스키마
-class DeleteRequest(BaseModel):
-    uuid: str  # 이미지 UUID
+# class DeleteRequest(BaseModel):
+#     uuid: str  # 이미지 UUID
 
-@router.post("/delete-image")
-def delete_image_vector(data: DeleteRequest):
-    index.delete(ids=[data.uuid])
-    return {"message": f"{data.uuid} deleted from Pinecone"}
+# @router.post("/delete-image")
+def delete_image_vector(image_uuid: str):
+    index.delete(ids=[image_uuid])
+    return {"message": f"{image_uuid} deleted from Pinecone"}

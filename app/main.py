@@ -22,10 +22,23 @@ from fastapi_limiter import FastAPILimiter
 from redis.asyncio import Redis
 import os
 
+from clip.koclip_model import encode_text
+import pinecone
+from dotenv import load_dotenv
+
+# 0. 환경 변수 로딩
+load_dotenv()
+
+# 1. Pinecone 초기화
+pinecone.init(
+    api_key=os.getenv("PINECONE_API_KEY"),
+    environment=os.getenv("PINECONE_ENV")
+)
+
+index = pinecone.Index("image")
+
 # pinecone router 등록
 from api.clip_api import router as clip_router
-from api.search_api import router as search_router
-
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
@@ -111,6 +124,10 @@ class ClipboardDataResponse(BaseModel):
     created_at: int
     tags: List[TagResponse]
     image_meta: Optional[Dict] = None
+class TextSearchRequest(BaseModel):
+    query: str
+
+
 
 # 데이터베이스 초기화 함수
 async def initialize_database():
@@ -244,7 +261,6 @@ os.makedirs(thumbnail_dir, exist_ok=True)
 app.mount("/images/original", StaticFiles(directory=original_dir), name="original-images")
 app.mount("/images/thumbnail", StaticFiles(directory=thumbnail_dir), name="thumbnail-images")
 app.include_router(clip_router)
-app.include_router(search_router)
 
 
 
@@ -607,7 +623,8 @@ async def create_data_tag(dt: DataTagCreate, db=Depends(get_db)):
         await conn.rollback()
         logger.error(f"Data-Tag creation failed: {str(e)}")
         raise HTTPException(500, "Internal server error")
-    
+from api.clip_api import vectorize_image_by_path, delete_image_vector
+
 @app.post("/items/image")
 async def upload_image(
     file: UploadFile = File(...),
@@ -697,6 +714,17 @@ async def upload_image(
         )
 
         await conn.commit()
+        
+        try:
+            # 동기 함수를 비동기 컨텍스트에서 실행
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None, 
+                lambda: vectorize_image_by_path(id, original_path)
+            )
+        except Exception as e:
+            logger.error(f"Vectorization failed: {str(e)}")
+
         return JSONResponse(
             status_code=status.HTTP_201_CREATED,
             content={"id": id, "message": "Image uploaded successfully"}
@@ -739,6 +767,15 @@ async def delete_item(
     except HTTPException:
         await conn.rollback()
         raise
+    try:
+        # 벡터 삭제
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None, 
+            lambda: delete_image_vector(item_id)
+        )
+    except Exception as e:
+        logger.error(f"Vector deletion failed: {str(e)}")
         
     except Exception as e:
         await conn.rollback()
@@ -908,6 +945,106 @@ async def get_image_file(
     except Exception as e:
         logger.error(f"Image fetch failed: {str(e)}")
         raise HTTPException(500, "Internal server error")
+    
+
+
+@app.post("/search-text")
+async def search_similar_images(
+    data: TextSearchRequest,
+    user: Dict = Depends(get_current_user),
+    db=Depends(get_db)
+):
+    query = data.query
+    user_id = user["user_id"]
+
+    # KoCLIP 텍스트 임베딩
+    vec = encode_text(query).tolist()
+
+    # Pinecone에서 유사 벡터 검색
+    result = index.query(
+        vector=vec, 
+        top_k=10,  # 상위 10개 결과
+        include_metadata=True
+    )
+    
+    # 검색 결과에서 ID 추출
+    image_ids = [match["id"] for match in result['matches']]
+    
+    # DB에서 상세 정보 조회
+    conn, cursor = db
+    try:
+        if not image_ids:
+            return {"query": query, "results": []}
+        
+        # IN 절 파라미터 준비
+        placeholders = ",".join(["%s"] * len(image_ids))
+        query_sql = f"""
+            SELECT c.id, c.user_id, c.content, c.type, c.format, c.created_at,
+                   GROUP_CONCAT(t.tag_id) AS tag_ids,
+                   GROUP_CONCAT(t.name) AS tag_names,
+                   GROUP_CONCAT(t.source) AS tag_sources,
+                   im.width, im.height, im.file_size,
+                   im.file_path, im.thumbnail_path
+            FROM clipboard c
+            LEFT JOIN data_tag dt ON c.id = dt.data_id
+            LEFT JOIN tag t ON dt.tag_id = t.tag_id
+            LEFT JOIN image_meta im ON c.id = im.data_id
+            WHERE c.user_id = %s
+            AND c.id IN ({placeholders})
+            GROUP BY c.id
+            ORDER BY c.created_at DESC
+        """
+        params = [user_id] + image_ids
+        
+        await cursor.execute(query_sql, params)
+        results = await cursor.fetchall()
+        
+        # 결과 가공
+        data_list = []
+        for row in results:
+            tags = []
+            if row["tag_ids"]:
+                tag_ids = row["tag_ids"].split(',')
+                names = row["tag_names"].split(',')
+                sources = row["tag_sources"].split(',')
+                tags = [
+                    {"tag_id": tid, "name": n, "source": s}
+                    for tid, n, s in zip(tag_ids, names, sources)
+                ]
+            
+            image_meta = None
+            if row.get("file_path"):
+                # 파일 경로에서 파일명 추출
+                file_name = os.path.basename(row["file_path"])
+                thumb_name = os.path.basename(row["thumbnail_path"]) if row.get("thumbnail_path") else None
+                
+                image_meta = {
+                    "width": row["width"],
+                    "height": row["height"],
+                    "file_size": row["file_size"],
+                    "file_path": f"/images/original/{file_name}",
+                    "thumbnail_path": f"/images/thumbnail/{thumb_name}" if thumb_name else None
+                }
+                
+            data_list.append({
+                "id": row["id"],
+                "user_id": row["user_id"],
+                "content": row["content"],
+                "data_type": row["type"],
+                "format": row["format"],
+                "created_at": row["created_at"],
+                "tags": tags,
+                "image_meta": image_meta
+            })
+            
+        return {
+            "query": query,
+            "results": data_list
+        }
+        
+    except Exception as e:
+        logging.error(f"Text search failed: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 # 에러 핸들러 (기존과 동일)
 @app.exception_handler(HTTPException)
