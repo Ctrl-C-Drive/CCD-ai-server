@@ -155,7 +155,7 @@ async def initialize_database():
             format VARCHAR(50) NOT NULL,
             content VARCHAR(255) NOT NULL,
             created_at INTEGER NOT NULL,
-            shared ENUM('cloud', 'local') NOT NULL, 
+            shared ENUM('cloud', 'local', 'both') NOT NULL, 
             FOREIGN KEY (user_id) REFERENCES user(user_id) ON DELETE CASCADE
         );
         
@@ -550,7 +550,7 @@ async def create_item(item: ItemCreate, user: Dict = Depends(get_current_user), 
                 item.type,
                 item.format,
                 item.created_at,
-                'local'
+                'both'
             )
         )
         await conn.commit()
@@ -702,7 +702,7 @@ async def upload_image(
             INSERT INTO clipboard (id, user_id, content, type, format, created_at, shared)
             VALUES (%s, %s, %s, 'img', %s, %s, %s)
             """,
-            (id, user_id, original_url, format, created_at, 'local')  # content 필드에 URL 저장 추천
+            (id, user_id, original_url, format, created_at, 'both')  # content 필드에 URL 저장 추천
         )
 
         await cursor.execute(
