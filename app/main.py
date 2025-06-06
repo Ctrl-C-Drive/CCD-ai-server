@@ -153,7 +153,7 @@ async def initialize_database():
             user_id VARCHAR(255) NOT NULL, 
             type ENUM('img', 'txt') NOT NULL,
             format VARCHAR(50) NOT NULL,
-            content VARCHAR(255) NOT NULL,
+            content TEXT NOT NULL,
             created_at INTEGER NOT NULL,
             shared ENUM('cloud', 'local', 'both') NOT NULL, 
             FOREIGN KEY (user_id) REFERENCES user(user_id) ON DELETE CASCADE
@@ -364,7 +364,7 @@ async def login(user: UserLoginRequest, db=Depends(get_db)):
         result = await cursor.fetchone()
 
         if not result or not bcrypt.checkpw(user.password.encode(), result["password"].encode()):
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED)
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
         # 토큰 생성
         access_token = create_access_token(user.user_id)
@@ -385,9 +385,13 @@ async def login(user: UserLoginRequest, db=Depends(get_db)):
             "token_type": "bearer"
         }
 
+    except HTTPException as e:
+        logger.warning(f"Login failed with HTTP error: {e.detail}")
+        raise e  # 꼭 다시 던져야 FastAPI가 제대로 처리
+
     except Exception as e:
-        logger.error("Login failed", exc_info=e)
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR)
+        logger.error("Unexpected error during login", exc_info=e)
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
 
 @app.post("/refresh", dependencies=[Depends(RateLimiter(times=5, minutes=1))])
 async def refresh_token(request: RefreshTokenRequest, db=Depends(get_db)):
