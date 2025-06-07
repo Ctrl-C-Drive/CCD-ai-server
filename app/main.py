@@ -23,19 +23,30 @@ from redis.asyncio import Redis
 import os
 
 from clip.koclip_model import encode_text
-import pinecone
+from pinecone import Pinecone, ServerlessSpec
 from dotenv import load_dotenv
 
 # 0. 환경 변수 로딩
-load_dotenv()
+env_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
+load_dotenv(dotenv_path=env_path)
 
 # 1. Pinecone 초기화
-pinecone.init(
-    api_key=os.getenv("PINECONE_API_KEY"),
-    environment=os.getenv("PINECONE_ENV")
-)
+pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 
-index = pinecone.Index("image")
+index_name = "images"
+index = pc.Index(index_name)
+
+# 인덱스 없으면 생성
+if index_name not in pc.list_indexes().names():
+    pc.create_index(
+        name=index_name,
+        dimension=768,
+        metric="cosine",
+        spec=ServerlessSpec(
+            cloud="aws",
+            region="us-east-1"
+        )
+    )
 
 # pinecone router 등록
 from api.clip_api import router as clip_router
