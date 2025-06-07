@@ -14,6 +14,7 @@ services:
       DB_NAME: ${DB_NAME} # .env에서 가져옴
       REDIS_URL: "redis://redis:6379" # 컨테이너 이름으로 직접 지정
       SECRET_KEY: ${SECRET_KEY}
+      PINECONE_API_KEY: ${PINECONE_API_KEY}
     depends_on:
       mysql-db:
         condition: service_healthy
