@@ -101,6 +101,7 @@ class MaxCountUpdateRequest(BaseModel):
 
 class localDelete(BaseModel):
     item_id: str
+    shared: str
 
 class TagCreate(BaseModel):
     tag_id: str
@@ -120,6 +121,7 @@ class ClipboardDataResponse(BaseModel):
     id: str
     content: str
     type: str
+    shared: str
     format: str
     created_at: int
     tags: List[TagResponse]
@@ -317,14 +319,13 @@ async def local_delete(request: localDelete, user: dict = Depends(get_current_us
         result = await cursor.fetchone()
         if not result:
             raise HTTPException(status_code=404, detail="Item not found or unauthorized")
-        if result["shared"] == "cloud":
-            return {"message": "Already in cloud"}
 
         # shared 상태 변경
         await cursor.execute(
-            "UPDATE clipboard SET shared = 'cloud' WHERE id = %s AND user_id = %s",
-            (request.item_id, user_id)
+            "UPDATE clipboard SET shared = %s WHERE id = %s AND user_id = %s",
+            (request.shared, request.item_id, user_id)
         )
+
         await conn.commit()
         return {"message": "shared info changed"}
     except Exception as e:
