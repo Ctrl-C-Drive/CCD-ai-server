@@ -16,5 +16,5 @@ python-multipart
 requests
 torch
 transformers
-pinecone-client==2.2.4
+pinecone==7.0.2
 torchvision
