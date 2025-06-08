@@ -239,7 +239,8 @@ async def lifespan(app: FastAPI):
             minsize=5,
             maxsize=20,
             auth_plugin="mysql_native_password",
-            charset="utf8mb4"
+            charset="utf8mb4",
+            autocommit=True, 
         )
 
         # Redis 연결
@@ -284,6 +285,7 @@ async def get_db():
             yield conn, cursor
 
 security = HTTPBearer(auto_error=False)
+
 
 # JWT 유틸리티 
 def create_access_token(user_id: str) -> str:
@@ -808,7 +810,12 @@ async def get_user_clipboard_data(
     user: Dict = Depends(get_current_user), 
     db=Depends(get_db)
 ):
+
     conn, cursor = db
+    await cursor.execute("SELECT DATABASE();")
+    row = await cursor.fetchone()
+    logger.info("FASTAPI uses DB: %s", row["DATABASE()"])   
+    
     try:
         # 클립보드 데이터 + 태그 조회
         await cursor.execute("""
@@ -857,7 +864,7 @@ async def get_user_clipboard_data(
                 "image_meta": image_meta
             })
             
-        return data_list
+        return JSONResponse(content=data_list, headers={"Cache-Control": "no-store"})
         
     except Exception as e:
         logger.error(f"Data fetch failed: {str(e)}")
