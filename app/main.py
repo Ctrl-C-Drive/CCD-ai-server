@@ -970,68 +970,25 @@ async def search_similar_images(
         conn, cursor = db
         placeholders = ",".join(["%s"] * len(image_ids))
         query_sql = f"""
-            SELECT c.id, c.user_id, c.content, c.type, c.format, c.created_at,
-                   GROUP_CONCAT(t.tag_id) AS tag_ids,
-                   GROUP_CONCAT(t.name) AS tag_names,
-                   GROUP_CONCAT(t.source) AS tag_sources,
-                   im.width, im.height, im.file_size,
-                   im.file_path, im.thumbnail_path
+            SELECT c.id
             FROM clipboard c
-            LEFT JOIN data_tag dt ON c.id = dt.data_id
-            LEFT JOIN tag t ON dt.tag_id = t.tag_id
-            LEFT JOIN image_meta im ON c.id = im.data_id
             WHERE c.user_id = %s
             AND c.id IN ({placeholders})
-            GROUP BY c.id
-            ORDER BY c.created_at DESC
         """
         params = [user_id] + image_ids
         await cursor.execute(query_sql, params)
         results = await cursor.fetchall()
 
-        # 결과 정제
-        data_list = []
-        for row in results:
-            tags = []
-            if row["tag_ids"]:
-                tag_ids = row["tag_ids"].split(',')
-                names = row["tag_names"].split(',')
-                sources = row["tag_sources"].split(',')
-                tags = [
-                    {"tag_id": tid, "name": n, "source": s}
-                    for tid, n, s in zip(tag_ids, names, sources)
-                ]
-            image_meta = None
-            if row.get("file_path"):
-                file_name = os.path.basename(row["file_path"])
-                thumb_name = os.path.basename(row["thumbnail_path"]) if row.get("thumbnail_path") else None
-                image_meta = {
-                    "width": row["width"],
-                    "height": row["height"],
-                    "file_size": row["file_size"],
-                    "file_path": f"/images/original/{file_name}",
-                    "thumbnail_path": f"/images/thumbnail/{thumb_name}" if thumb_name else None
-                }
+        found_ids = [row["id"] for row in results]
 
-            data_list.append({
-                "id": row["id"],
-                "user_id": row["user_id"],
-                "content": row["content"],
-                "data_type": row["type"],
-                "format": row["format"],
-                "created_at": row["created_at"],
-                "tags": tags,
-                "image_meta": image_meta
-            })
-
-        return {"query": query, "results": data_list}
+        return {
+            "query": query,
+            "ids": found_ids
+        }
 
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        logging.error(f"Text search failed: {str(e)}", exc_info=True)
+        logger.error(f"Text search failed: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
-
 # 에러 핸들러 (기존과 동일)
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request, exc):
