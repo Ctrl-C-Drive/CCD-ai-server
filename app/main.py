@@ -23,7 +23,7 @@ from redis.asyncio import Redis
 import os
 
 from clip.koclip_model import encode_text
-from pinecone import Pinecone, ServerlessSpec
+from pinecone import Pinecone
 from dotenv import load_dotenv
 
 # 0. 환경 변수 로딩
@@ -35,18 +35,6 @@ pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 
 index_name = "images"
 index = pc.Index(index_name)
-
-# 인덱스 없으면 생성
-if index_name not in pc.list_indexes().names():
-    pc.create_index(
-        name=index_name,
-        dimension=768,
-        metric="cosine",
-        spec=ServerlessSpec(
-            cloud="aws",
-            region="us-east-1"
-        )
-    )
 
 # pinecone router 등록
 from api.clip_api import router as clip_router
@@ -959,26 +947,27 @@ async def search_similar_images(
     user_id = user["user_id"]
     logger.info(f"CLIP 검색 요청 query: {query}")
 
-    # KoCLIP 텍스트 임베딩
-    vec = encode_text(query).tolist()
-
-    # Pinecone에서 유사 벡터 검색
-    result = index.query(
-        vector=vec, 
-        top_k=10,  # 상위 10개 결과
-        include_metadata=True
-    )
-    
-    # 검색 결과에서 ID 추출
-    image_ids = [match["id"] for match in result['matches']]
-    
-    # DB에서 상세 정보 조회
-    conn, cursor = db
     try:
+        # KoCLIP 텍스트 임베딩
+        vec = encode_text(query)
+        vec = vec.tolist()
+
+        # 이미 정의된 index 객체 사용
+        result = index.query(
+            vector=vec,
+            top_k=10,
+            include_metadata=True
+        )
+
+        # 유효한 ID만 필터링
+        matches = result.get("matches", [])
+        image_ids = [m.get("id") for m in matches if m.get("id") is not None]
+
         if not image_ids:
             return {"query": query, "results": []}
-        
-        # IN 절 파라미터 준비
+
+        # DB 연결
+        conn, cursor = db
         placeholders = ",".join(["%s"] * len(image_ids))
         query_sql = f"""
             SELECT c.id, c.user_id, c.content, c.type, c.format, c.created_at,
@@ -997,11 +986,10 @@ async def search_similar_images(
             ORDER BY c.created_at DESC
         """
         params = [user_id] + image_ids
-        
         await cursor.execute(query_sql, params)
         results = await cursor.fetchall()
-        
-        # 결과 가공
+
+        # 결과 정제
         data_list = []
         for row in results:
             tags = []
@@ -1013,13 +1001,10 @@ async def search_similar_images(
                     {"tag_id": tid, "name": n, "source": s}
                     for tid, n, s in zip(tag_ids, names, sources)
                 ]
-            
             image_meta = None
             if row.get("file_path"):
-                # 파일 경로에서 파일명 추출
                 file_name = os.path.basename(row["file_path"])
                 thumb_name = os.path.basename(row["thumbnail_path"]) if row.get("thumbnail_path") else None
-                
                 image_meta = {
                     "width": row["width"],
                     "height": row["height"],
@@ -1027,7 +1012,7 @@ async def search_similar_images(
                     "file_path": f"/images/original/{file_name}",
                     "thumbnail_path": f"/images/thumbnail/{thumb_name}" if thumb_name else None
                 }
-                
+
             data_list.append({
                 "id": row["id"],
                 "user_id": row["user_id"],
@@ -1038,13 +1023,12 @@ async def search_similar_images(
                 "tags": tags,
                 "image_meta": image_meta
             })
-            
-        return {
-            "query": query,
-            "results": data_list
-        }
-        
+
+        return {"query": query, "results": data_list}
+
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         logging.error(f"Text search failed: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
 
