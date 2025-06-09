@@ -2,8 +2,10 @@ import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+import torch
 from dotenv import load_dotenv
 from pinecone import Pinecone
+from clip.koclip_model import encode_text
 
 # 현재 디렉토리에서 import
 from clip_api import vectorize_image_by_path, delete_image_vector
@@ -33,3 +35,34 @@ print(fetch_result)
 # 6. 인덱스 상태 출력
 print("\n=== [3] describe_index_stats 결과 ===")
 print(index.describe_index_stats())
+
+# 7. 텍스트 임베딩 테스트
+print("\n=== [4] 텍스트 임베딩 테스트 ===")
+test_text = "레이싱 자동차"
+
+try:
+    embedding = encode_text(test_text)
+    print(f"임베딩 벡터 길이: {embedding.shape}")
+    print("nan 포함 여부:", torch.isnan(embedding).any().item())
+    print("inf 포함 여부:", torch.isinf(embedding).any().item())
+    print(f"첫 5개 값: {embedding[:5]}")
+except Exception as e:
+    print("❌ 텍스트 임베딩 실패:", str(e))
+    import traceback
+    traceback.print_exc()
+
+# 8. Pinecone 텍스트 검색 테스트
+print("\n=== [5] Pinecone 검색 테스트 ===")
+try:
+    search_result = index.query(
+        vector=embedding.tolist(),
+        top_k=5,
+        include_metadata=True
+    )
+    print("검색 결과 개수:", len(search_result['matches']))
+    for match in search_result['matches']:
+        print(f"ID: {match.get('id')}, Score: {match.get('score')}")
+except Exception as e:
+    print("❌ Pinecone 검색 실패:", str(e))
+    import traceback
+    traceback.print_exc()
