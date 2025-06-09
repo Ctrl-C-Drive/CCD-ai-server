@@ -110,10 +110,6 @@ class RefreshTokenRequest(BaseModel):
 class MaxCountUpdateRequest(BaseModel):
     max_count_cloud: int = Field(..., ge=1, le=1000)
 
-class localDelete(BaseModel):
-    item_id: str
-    shared: str
-
 class TagCreate(BaseModel):
     tag_id: str
     name: str
@@ -132,7 +128,6 @@ class ClipboardDataResponse(BaseModel):
     id: str
     content: str
     type: str
-    shared: str
     format: str
     created_at: int
     tags: List[TagResponse]
@@ -168,7 +163,6 @@ async def initialize_database():
             format VARCHAR(50) NOT NULL,
             content TEXT NOT NULL,
             created_at INTEGER NOT NULL,
-            shared ENUM('cloud', 'local', 'both') NOT NULL, 
             FOREIGN KEY (user_id) REFERENCES user(user_id) ON DELETE CASCADE
         );
         
@@ -318,32 +312,6 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token expired")
     except jwt.JWTError as e:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(e))
-
-@app.post("/items/localDelete", status_code=200)
-async def local_delete(request: localDelete, user: dict = Depends(get_current_user), db=Depends(get_db)):
-    conn, cursor = db
-    user_id = user["user_id"]
-    try:
-        # 해당 아이템이 본인의 것인지 확인
-        await cursor.execute(
-            "SELECT shared FROM clipboard WHERE id = %s AND user_id = %s",
-            (request.item_id, user_id)
-        )
-        result = await cursor.fetchone()
-        if not result:
-            raise HTTPException(status_code=404, detail="Item not found or unauthorized")
-
-        # shared 상태 변경
-        await cursor.execute(
-            "UPDATE clipboard SET shared = %s WHERE id = %s AND user_id = %s",
-            (request.shared, request.item_id, user_id)
-        )
-
-        await conn.commit()
-        return {"message": "shared info changed"}
-    except Exception as e:
-        await conn.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to update shared status: {e}")
 
 # 엔드포인트 
 @app.post("/signup")
@@ -558,8 +526,8 @@ async def create_item(item: ItemCreate, user: Dict = Depends(get_current_user), 
         await delete_oldest_item_if_full(user_id, max_count_cloud, conn, cursor)
         await cursor.execute(
             """
-            INSERT INTO clipboard (id, user_id, content, type, format, created_at, shared)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO clipboard (id, user_id, content, type, format, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
             """,
             (
                 item.id,
@@ -568,7 +536,6 @@ async def create_item(item: ItemCreate, user: Dict = Depends(get_current_user), 
                 item.type,
                 item.format,
                 item.created_at,
-                'both'
             )
         )
         await conn.commit()
@@ -592,16 +559,27 @@ async def create_or_get_tag(tag: TagCreate, db=Depends(get_db)):
         existing = await cursor.fetchone()
         
         if existing:
-            return {**tag.model_dump(), "tag_id": existing["tag_id"]}
-            
-        # 새 태그 생성
+            return {
+                "tag_id": existing["tag_id"],
+                "name": tag.name,
+                "source": tag.source
+            }
+
+        # 새 태그 생성 (tag_id가 전달되지 않았다면 새로 생성)
+        new_tag_id = getattr(tag, "tag_id", None) or str(uuid4())
+
         await cursor.execute(
             "INSERT INTO tag (tag_id, name, source) VALUES (%s, %s, %s)",
-            (tag.tag_id, tag.name, tag.source)
+            (new_tag_id, tag.name, tag.source)
         )
         await conn.commit()
-        return tag.model_dump()
-        
+
+        return {
+            "tag_id": new_tag_id,
+            "name": tag.name,
+            "source": tag.source
+        }
+
     except aiomysql.IntegrityError as e:
         await conn.rollback()
         if "Duplicate entry" in str(e):
@@ -717,10 +695,10 @@ async def upload_image(
         # Database operations
         await cursor.execute(
             """
-            INSERT INTO clipboard (id, user_id, content, type, format, created_at, shared)
-            VALUES (%s, %s, %s, 'img', %s, %s, %s)
+            INSERT INTO clipboard (id, user_id, content, type, format, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
             """,
-            (id, user_id, original_url, format, created_at, 'both')  # content 필드에 URL 저장 추천
+            (id, user_id, original_url, 'img', format, created_at)
         )
 
         await cursor.execute(
@@ -979,6 +957,7 @@ async def search_similar_images(
 ):
     query = data.query
     user_id = user["user_id"]
+    logger.info(f"CLIP 검색 요청 query: {query}")
 
     # KoCLIP 텍스트 임베딩
     vec = encode_text(query).tolist()
