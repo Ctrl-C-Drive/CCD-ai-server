@@ -98,14 +98,10 @@ class RefreshTokenRequest(BaseModel):
 class MaxCountUpdateRequest(BaseModel):
     max_count_cloud: int = Field(..., ge=1, le=1000)
 
-class TagCreate(BaseModel):
-    tag_id: str
-    name: str
-    source: Literal["auto", "user"]
-
-class DataTagCreate(BaseModel):
+class TagCreateAndLink(BaseModel):
     data_id: str
-    tag_id: str
+    name: str
+    source: str  # 'auto' or 'user'
 
 class TagResponse(BaseModel):
     tag_id: str
@@ -534,79 +530,132 @@ async def create_item(item: ItemCreate, user: Dict = Depends(get_current_user), 
         await conn.rollback()
         logger.error("Item creation failed", exc_info=e)
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR)
- 
-@app.post("/tags", response_model=TagResponse)
-async def create_or_get_tag(tag: TagCreate, db=Depends(get_db)):
+    
+
+@app.post("/tags")
+async def create_tag_and_link(dt: TagCreateAndLink, db=Depends(get_db)):
     conn, cursor = db
     try:
-        # 기존 태그 확인
-        await cursor.execute(
-            "SELECT tag_id FROM tag WHERE name = %s AND source = %s",
-            (tag.name, tag.source)
-        )
-        existing = await cursor.fetchone()
-        
-        if existing:
-            return {
-                "tag_id": existing["tag_id"],
-                "name": tag.name,
-                "source": tag.source
-            }
-
-        # 새 태그 생성 (tag_id가 전달되지 않았다면 새로 생성)
-        new_tag_id = getattr(tag, "tag_id", None) or str(uuid4())
-
-        await cursor.execute(
-            "INSERT INTO tag (tag_id, name, source) VALUES (%s, %s, %s)",
-            (new_tag_id, tag.name, tag.source)
-        )
-        await conn.commit()
-
-        return {
-            "tag_id": new_tag_id,
-            "name": tag.name,
-            "source": tag.source
-        }
-
-    except aiomysql.IntegrityError as e:
-        await conn.rollback()
-        if "Duplicate entry" in str(e):
-            raise HTTPException(400, "Tag ID already exists")
-        raise
-    except Exception as e:
-        await conn.rollback()
-        logger.error(f"Tag creation failed: {str(e)}")
-        raise HTTPException(500, "Internal server error")
-
-# 2. 데이터-태그 연결 엔드포인트
-@app.post("/data-tags")
-async def create_data_tag(dt: DataTagCreate, db=Depends(get_db)):
-    conn, cursor = db
-    try:
-        # 데이터 및 태그 존재 여부 확인
+        # 1. data_id 유효성 확인
         await cursor.execute("SELECT id FROM clipboard WHERE id = %s", (dt.data_id,))
         if not await cursor.fetchone():
             raise HTTPException(404, "Data not found")
-            
-        await cursor.execute("SELECT tag_id FROM tag WHERE tag_id = %s", (dt.tag_id,))
-        if not await cursor.fetchone():
-            raise HTTPException(404, "Tag not found")
-            
-        # 연결 생성
+
+        # 2. 동일한 (name, source) 태그가 있는지 확인
         await cursor.execute(
-            "INSERT INTO data_tag (data_id, tag_id) VALUES (%s, %s)",
-            (dt.data_id, dt.tag_id)
+            "SELECT tag_id FROM tag WHERE name = %s AND source = %s",
+            (dt.name, dt.source)
         )
+        tag = await cursor.fetchone()
+
+        if tag:
+            tag_id = tag["tag_id"]
+        else:
+            # 3. 새 태그 생성
+            tag_id = str(uuid.uuid4())
+            await cursor.execute(
+                "INSERT INTO tag (tag_id, name, source) VALUES (%s, %s, %s)",
+                (tag_id, dt.name, dt.source)
+            )
+
+        # 4. data_tag 연결 시도
+        try:
+            await cursor.execute(
+                "INSERT INTO data_tag (data_id, tag_id) VALUES (%s, %s)",
+                (dt.data_id, tag_id)
+            )
+        except aiomysql.IntegrityError:
+            # 이미 연결된 경우는 무시 가능
+            pass
+
         await conn.commit()
-        return {"message": "Data-Tag association created"}
-        
-    except aiomysql.IntegrityError:
-        await conn.rollback()
-        raise HTTPException(400, "Association already exists")
+        return {
+            "tag_id": tag_id,
+            "name": dt.name,
+            "source": dt.source,
+            "message": "Tag linked successfully"
+        }
+
+    except HTTPException:
+        raise
     except Exception as e:
         await conn.rollback()
-        logger.error(f"Data-Tag creation failed: {str(e)}")
+        logger.error(f"Tag link failed: {str(e)}")
         raise HTTPException(500, "Internal server error")
+ 
+# @app.post("/tags", response_model=TagResponse)
+# async def create_or_get_tag(tag: TagCreate, db=Depends(get_db)):
+#     conn, cursor = db
+#     try:
+#         # 기존 태그 확인
+#         await cursor.execute(
+#             "SELECT tag_id FROM tag WHERE name = %s AND source = %s",
+#             (tag.name, tag.source)
+#         )
+#         existing = await cursor.fetchone()
+        
+#         if existing:
+#             return {
+#                 "tag_id": existing["tag_id"],
+#                 "name": tag.name,
+#                 "source": tag.source
+#             }
+
+#         # 새 태그 생성 (tag_id가 전달되지 않았다면 새로 생성)
+#         new_tag_id = getattr(tag, "tag_id", None) or str(uuid4())
+
+#         await cursor.execute(
+#             "INSERT INTO tag (tag_id, name, source) VALUES (%s, %s, %s)",
+#             (new_tag_id, tag.name, tag.source)
+#         )
+#         await conn.commit()
+
+#         return {
+#             "tag_id": new_tag_id,
+#             "name": tag.name,
+#             "source": tag.source
+#         }
+
+#     except aiomysql.IntegrityError as e:
+#         await conn.rollback()
+#         if "Duplicate entry" in str(e):
+#             raise HTTPException(400, "Tag ID already exists")
+#         raise
+#     except Exception as e:
+#         await conn.rollback()
+#         logger.error(f"Tag creation failed: {str(e)}")
+#         raise HTTPException(500, "Internal server error")
+
+# # 2. 데이터-태그 연결 엔드포인트
+# @app.post("/data-tags")
+# async def create_data_tag(dt: DataTagCreate, db=Depends(get_db)):
+#     conn, cursor = db
+#     try:
+#         # 데이터 및 태그 존재 여부 확인
+#         await cursor.execute("SELECT id FROM clipboard WHERE id = %s", (dt.data_id,))
+#         if not await cursor.fetchone():
+#             raise HTTPException(404, "Data not found")
+            
+#         await cursor.execute("SELECT tag_id FROM tag WHERE tag_id = %s", (dt.tag_id,))
+#         if not await cursor.fetchone():
+#             raise HTTPException(404, "Tag not found")
+            
+#         # 연결 생성
+#         await cursor.execute(
+#             "INSERT INTO data_tag (data_id, tag_id) VALUES (%s, %s)",
+#             (dt.data_id, dt.tag_id)
+#         )
+#         await conn.commit()
+#         return {"message": "Data-Tag association created"}
+        
+#     except aiomysql.IntegrityError:
+#         await conn.rollback()
+#         raise HTTPException(400, "Association already exists")
+#     except Exception as e:
+#         await conn.rollback()
+#         logger.error(f"Data-Tag creation failed: {str(e)}")
+#         raise HTTPException(500, "Internal server error")
+    
 from api.clip_api import vectorize_image_by_path, delete_image_vector
 
 @app.post("/items/image")
@@ -977,13 +1026,16 @@ async def search_similar_images(
         """
         params = [user_id] + image_ids
         await cursor.execute(query_sql, params)
-        results = await cursor.fetchall()
+        rows = await cursor.fetchall()
 
-        found_ids = [row["id"] for row in results]
+        found_map = {row["id"]: True for row in rows}
+
+        # 5. Pinecone 순서 기준으로 필터링 및 정렬
+        ordered_ids = [id for id in image_ids if id in found_map]
 
         return {
             "query": query,
-            "ids": found_ids
+            "ids": ordered_ids
         }
 
     except Exception as e:
