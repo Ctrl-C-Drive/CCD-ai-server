@@ -37,7 +37,7 @@ index = pc.Index(index_name)
 router = APIRouter()
 
 # 3. 이미지 벡터화 함수
-def vectorize_image_by_path(image_uuid: str, image_path: str):
+def vectorize_image_by_path(user_id: str, image_uuid: str, image_path: str):
     if not os.path.exists(image_path):
         return {"error": f"File not found: {image_path}"}
 
@@ -64,6 +64,6 @@ def vectorize_image_by_path(image_uuid: str, image_path: str):
     }
 
 # 4. 삭제 함수
-def delete_image_vector(image_uuid: str):
+def delete_image_vector(user_id: str, image_uuid: str):
     index.delete(ids=[image_uuid])
     return {"message": f"{image_uuid} deleted from Pinecone"}

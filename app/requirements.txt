@@ -1,5 +1,4 @@
 fastapi
-uvicorn
 pydantic
 asyncpg
 bcrypt
@@ -18,3 +17,5 @@ torch
 transformers
 pinecone==7.0.2
 torchvision
+typing
+uvicorn[standard]

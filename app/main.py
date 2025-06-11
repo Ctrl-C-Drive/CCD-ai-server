@@ -1,8 +1,9 @@
 import asyncio
 import io
+import json
 from PIL import Image
 import aiofiles
-from fastapi import FastAPI, Form, HTTPException, Depends, status, Request, File, UploadFile
+from fastapi import FastAPI, Form, HTTPException, Depends, status, Request, File, UploadFile, WebSocket
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
@@ -21,6 +22,7 @@ from fastapi_limiter.depends import RateLimiter
 from fastapi_limiter import FastAPILimiter
 from redis.asyncio import Redis
 import os
+from ws_manager import manager
 
 from clip.koclip_model import encode_text
 from pinecone import Pinecone
@@ -523,7 +525,11 @@ async def create_item(item: ItemCreate, user: Dict = Depends(get_current_user), 
             )
         )
         await conn.commit()
-
+        await manager.broadcast(user_id, json.dumps({
+            "event": "item_added",
+            "data_id": item.id,
+            "timestamp": int(datetime.now().timestamp())
+        }))
         return item.model_dump()
 
     except Exception as e:
@@ -753,7 +759,7 @@ async def upload_image(
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 None, 
-                lambda: vectorize_image_by_path(id, original_path)
+                lambda: vectorize_image_by_path(user_id, id, original_path)
             )
         except Exception as e:
             logger.error(f"Vectorization failed: {str(e)}")
@@ -783,40 +789,38 @@ async def delete_item(
 ):
     conn, cursor = db
     try:
-        # ON DELETE CASCADE로 인해 연관 데이터 자동 삭제
         await cursor.execute(
-            "DELETE FROM clipboard WHERE id = %s",
+            "SELECT user_id FROM clipboard WHERE id = %s",
             (item_id,)
         )
-        
-        if cursor.rowcount == 0:
-            raise HTTPException(
-                status.HTTP_404_NOT_FOUND,
-                detail=f"Item {item_id} not found"
-            )
-            
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Item {item_id} not found")
+        if row["user_id"] != user["user_id"]:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail="You are not allowed to delete this item")
+
+        await cursor.execute("DELETE FROM clipboard WHERE id = %s", (item_id,))
         await conn.commit()
-        
+        await manager.broadcast(user["user_id"], json.dumps({
+            "event": "item_deleted",
+            "data_id": item_id,
+            "timestamp": int(datetime.now().timestamp())
+        }))
     except HTTPException:
         await conn.rollback()
         raise
-    try:
-        # 벡터 삭제
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None, 
-            lambda: delete_image_vector(item_id)
-        )
-    except Exception as e:
-        logger.error(f"Vector deletion failed: {str(e)}")
-        
+
     except Exception as e:
         await conn.rollback()
         logger.error(f"Item deletion failed: {str(e)}")
-        raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Item deletion failed"
-        )
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Item deletion failed")
+
+    # 커밋 후 벡터 삭제 – 실패해도 에러로 안 넘김
+    try:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: delete_image_vector(user["user_id"], item_id))
+    except Exception as e:
+        logger.error(f"Vector deletion failed: {str(e)}")
 
 
 # 사용자 데이터 조회
@@ -1003,6 +1007,7 @@ async def search_similar_images(
 
         # 이미 정의된 index 객체 사용
         result = index.query(
+            #user_id= user_id,
             vector=vec,
             top_k=10,
             include_metadata=True
@@ -1041,7 +1046,17 @@ async def search_similar_images(
     except Exception as e:
         logger.error(f"Text search failed: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
-# 에러 핸들러 (기존과 동일)
+    
+@app.websocket("/ws/{user_id}")
+async def websocket_endpoint(websocket: WebSocket, user_id: str):
+    await manager.connect(user_id, websocket)
+    try:
+        while True:
+            await websocket.receive_text()  # or just keep alive
+    except:
+        manager.disconnect(user_id, websocket)
+
+# 에러 핸들러 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request, exc):
     logger.error(f"HTTP error {exc.status_code}: {exc.detail}")
