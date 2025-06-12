@@ -45,6 +45,8 @@ def vectorize_image_by_path(user_id: str, image_uuid: str, image_path: str):
     vec = encode_image(image_path)
     vec = vec.tolist()
 
+    print(f"User ID: {user_id}")
+
     # 5. Pinecone에 업서트
     index.upsert([
         {
