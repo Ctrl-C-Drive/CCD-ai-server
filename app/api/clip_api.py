@@ -69,8 +69,23 @@ def vectorize_image_by_path(user_id: str, image_uuid: str, image_path: str):
 
 # 4. 삭제 함수
 def delete_image_vector(user_id: str, image_uuid: str):
-    index.delete(ids=[image_uuid])
-    return {"message": f"{image_uuid} deleted from Pinecone"}
+    try:
+        # Pinecone에서 해당 벡터의 metadata 가져오기
+        result = index.fetch(ids=[image_uuid])
+        vector_data = result["vectors"].get(image_uuid)
+
+        if not vector_data:
+            return {"error": f"Vector with ID {image_uuid} not found in Pinecone"}
+
+        # metadata에서 user_id 확인
+        stored_user_id = vector_data["metadata"].get("userid")
+
+        # user_id가 일치하면 삭제
+        if stored_user_id == user_id:
+            index.delete(ids=[image_uuid])
+            return {"message": f"{image_uuid} deleted from Pinecone"}
+    except Exception as e:
+        return {"error": f"Failed to delete vector: {str(e)}"}
 
 # 5. record 전체 삭제 함수
 def delete_all_vectors():
