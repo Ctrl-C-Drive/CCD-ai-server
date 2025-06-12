@@ -7,8 +7,7 @@ from dotenv import load_dotenv
 from pinecone import Pinecone
 from clip.koclip_model import encode_text
 
-# 현재 디렉토리에서 import
-from clip_api import vectorize_image_by_path, delete_image_vector
+from clip_api import vectorize_image_by_path, delete_image_vector, delete_all_vectors
 
 # 1. 환경 변수 로드
 env_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
@@ -18,6 +17,7 @@ load_dotenv(dotenv_path=env_path)
 pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
 index = pc.Index("images")
 
+"""
 # 3. 테스트용 UUID와 이미지 경로
 uuid = "test-uuid-001"
 image_path = "C:\\Github\\CCD\\CCD-ai-server\\uploads\\original\\6acdecb4-2873-45dc-b127-7b9db5f4d87b.png"
@@ -64,5 +64,16 @@ try:
         print(f"ID: {match.get('id')}, Score: {match.get('score')}")
 except Exception as e:
     print("❌ Pinecone 검색 실패:", str(e))
+    import traceback
+    traceback.print_exc() 
+"""
+
+# 9. 모든 벡터 삭제 테스트
+print("\n=== [6] 모든 벡터 삭제 테스트 ===")
+try:
+    result = delete_all_vectors()  # ✅ delete_all_vectors 호출
+    print(result)
+except Exception as e:
+    print("❌ 모든 벡터 삭제 실패:", str(e))
     import traceback
     traceback.print_exc()

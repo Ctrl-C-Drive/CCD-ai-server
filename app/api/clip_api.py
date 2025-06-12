@@ -51,6 +51,7 @@ def vectorize_image_by_path(user_id: str, image_uuid: str, image_path: str):
             "id": image_uuid,
             "values": vec,
             "metadata": {
+                "userid": user_id,
                 "filename": os.path.basename(image_path),
                 "path": image_path
             }
@@ -59,6 +60,7 @@ def vectorize_image_by_path(user_id: str, image_uuid: str, image_path: str):
 
     return {
         "message": "vector stored to Pinecone",
+        "userid": user_id,
         "uuid": image_uuid,
         "path": image_path
     }
@@ -67,3 +69,11 @@ def vectorize_image_by_path(user_id: str, image_uuid: str, image_path: str):
 def delete_image_vector(user_id: str, image_uuid: str):
     index.delete(ids=[image_uuid])
     return {"message": f"{image_uuid} deleted from Pinecone"}
+
+# 5. record 전체 삭제 함수
+def delete_all_vectors():
+    try:
+        index.delete(delete_all=True)
+        return {"message": "All vectors deleted from Pinecone"}
+    except Exception as e:
+        return {"error": f"Failed to delete all vectors: {str(e)}"}
