@@ -5,6 +5,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import torch
 import torch.nn as nn
 from torchvision import transforms, models
+from torchvision.models import MobileNet_V3_Large_Weights
 from torch.utils.data import DataLoader
 from mobilenetv3.dataset import MultiLabelDataset
 from mobilenetv3.Classes import CLASSES
@@ -26,21 +27,15 @@ transform = transforms.Compose([
 
 # 데이터셋
 train_ds = MultiLabelDataset(
-    image_dir="dataset/train",
+    image_dir="dataset",
     json_path="multitag_train.json",
     transform=transform
 )
 
-val_ds = MultiLabelDataset(
-    image_dir="dataset/val",
-    json_path="multitag_val.json",
-    transform=transform
-)
-
 train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
-val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
+
 # 모델 정의
-model = models.mobilenet_v3_large(pretrained=True)
+model = models.mobilenet_v3_large(weights=MobileNet_V3_Large_Weights.DEFAULT)
 model.classifier[3] = nn.Linear(model.classifier[3].in_features, NUM_CLASSES)
 model = model.to(DEVICE)
 
@@ -63,11 +58,11 @@ for epoch in range(EPOCHS):
     print(f"[Epoch {epoch+1}/{EPOCHS}] Loss: {running_loss:.4f}")
 
 # 모델 저장
-torch.save(model.state_dict(), "mobilenetv3/mobilenetv3_trained.pth")
+torch.save(model.state_dict(), "mobilenetv3_trained_new.pth")
 
 # ONNX 저장
 dummy_input = torch.randn(1, 3, 224, 224).to(DEVICE)
-torch.onnx.export(model, dummy_input, "mobilenetv3/mobilenetv3_trained.onnx",
+torch.onnx.export(model, dummy_input, "mobilenetv3_trained_new.onnx",
                   input_names=["input"], output_names=["output"],
                   export_params=True, opset_version=11)
 

@@ -2,6 +2,7 @@ from icrawler.builtin import GoogleImageCrawler, BingImageCrawler
 from mobilenetv3.Classes import CLASSES
 import os
 
+KEYWORDS = ["기타"]
 SAVE_DIR = "dataset_raw"
 TARGET_PER_CLASS = 200
 MAX_TRIES_PER_KEYWORD = 1  # 각 키워드당 최대 1회 크롤링
@@ -19,7 +20,7 @@ def crawl_images(cls_dir, keyword, max_num):
     crawler = GoogleImageCrawler(storage={"root_dir": cls_dir})
     crawler.crawl(keyword=keyword, max_num=max_num)
 
-for cls in CLASSES:
+for cls in KEYWORDS:
     cls_dir = os.path.join(SAVE_DIR, cls)
     os.makedirs(cls_dir, exist_ok=True)
 
