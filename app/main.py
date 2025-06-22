@@ -780,6 +780,20 @@ async def upload_image(
         logger.error(f"Image upload failed: {str(e)}")
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+def delete_file_if_exists_by_url(url_path: str, base_dir: str):
+    """정적 URL을 파일 경로로 변환 후 삭제"""
+    if not url_path:
+        return
+    filename = os.path.basename(url_path)
+    abs_path = os.path.join(base_dir, filename)
+    if os.path.exists(abs_path):
+        try:
+            os.remove(abs_path)
+            print(f"Deleted file: {abs_path}")
+        except Exception as e:
+            print(f"Failed to delete file {abs_path}: {e}")
+
+
  # 클립보드 데이터 삭제
 @app.delete("/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_item(
@@ -799,6 +813,9 @@ async def delete_item(
         if row["user_id"] != user["user_id"]:
             raise HTTPException(status.HTTP_403_FORBIDDEN, detail="You are not allowed to delete this item")
 
+        await cursor.execute("SELECT file_path, thumbnail_path FROM image_meta WHERE data_id = %s", (item_id,))
+        image_row = await cursor.fetchone()
+
         await cursor.execute("DELETE FROM clipboard WHERE id = %s", (item_id,))
         await conn.commit()
         await manager.broadcast(user["user_id"], json.dumps({
@@ -814,6 +831,9 @@ async def delete_item(
         await conn.rollback()
         logger.error(f"Item deletion failed: {str(e)}")
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Item deletion failed")
+    if image_row:
+        delete_file_if_exists_by_url(image_row["file_path"], original_dir)
+        delete_file_if_exists_by_url(image_row["thumbnail_path"], thumbnail_dir)
 
     # 커밋 후 벡터 삭제 – 실패해도 에러로 안 넘김
     try:
@@ -833,8 +853,6 @@ async def get_user_clipboard_data(
     conn, cursor = db
     await cursor.execute("SELECT DATABASE();")
     row = await cursor.fetchone()
-    logger.info("FASTAPI uses DB: %s", row["DATABASE()"])   
-    
     try:
         # 클립보드 데이터 + 태그 조회
         await cursor.execute("""
