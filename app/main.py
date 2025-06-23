@@ -1,8 +1,9 @@
 import asyncio
 import io
+import json
 from PIL import Image
 import aiofiles
-from fastapi import FastAPI, Form, HTTPException, Depends, status, Request, File, UploadFile
+from fastapi import FastAPI, Form, HTTPException, Depends, status, Request, File, UploadFile, WebSocket
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
@@ -21,6 +22,24 @@ from fastapi_limiter.depends import RateLimiter
 from fastapi_limiter import FastAPILimiter
 from redis.asyncio import Redis
 import os
+from ws_manager import manager
+
+from clip.koclip_model import encode_text
+from pinecone import Pinecone
+from dotenv import load_dotenv
+
+# 0. 환경 변수 로딩
+env_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
+load_dotenv(dotenv_path=env_path)
+
+# 1. Pinecone 초기화
+pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+
+index_name = "images"
+index = pc.Index(index_name)
+
+# pinecone router 등록
+from api.clip_api import router as clip_router
 
 # 로깅 설정
 logger = logging.getLogger("uvicorn")
@@ -85,17 +104,10 @@ class RefreshTokenRequest(BaseModel):
 class MaxCountUpdateRequest(BaseModel):
     max_count_cloud: int = Field(..., ge=1, le=1000)
 
-class localDelete(BaseModel):
-    item_id: str
-
-class TagCreate(BaseModel):
-    tag_id: str
-    name: str
-    source: Literal["auto", "user"]
-
-class DataTagCreate(BaseModel):
+class TagCreateAndLink(BaseModel):
     data_id: str
-    tag_id: str
+    name: str
+    source: str  # 'auto' or 'user'
 
 class TagResponse(BaseModel):
     tag_id: str
@@ -110,6 +122,10 @@ class ClipboardDataResponse(BaseModel):
     created_at: int
     tags: List[TagResponse]
     image_meta: Optional[Dict] = None
+class TextSearchRequest(BaseModel):
+    query: str
+
+
 
 # 데이터베이스 초기화 함수
 async def initialize_database():
@@ -135,9 +151,8 @@ async def initialize_database():
             user_id VARCHAR(255) NOT NULL, 
             type ENUM('img', 'txt') NOT NULL,
             format VARCHAR(50) NOT NULL,
-            content VARCHAR(255) NOT NULL,
+            content TEXT NOT NULL,
             created_at INTEGER NOT NULL,
-            shared ENUM('cloud', 'local') NOT NULL, 
             FOREIGN KEY (user_id) REFERENCES user(user_id) ON DELETE CASCADE
         );
         
@@ -177,13 +192,20 @@ async def initialize_database():
     async with app_state.db_pool.acquire() as conn:
         async with conn.cursor() as cursor:
             try:
-                await cursor.execute(DROP_TABLES)
-                await cursor.execute(CREATE_TABLES)
+                for statement in DROP_TABLES.strip().split(';'):
+                    stmt = statement.strip()
+                    if stmt:
+                        await cursor.execute(stmt + ';')
+
+                for statement in CREATE_TABLES.strip().split(';'):
+                    stmt = statement.strip()
+                    if stmt:
+                        await cursor.execute(stmt + ';')
+
                 await conn.commit()
             except Exception as e:
                 await conn.rollback()
                 logger.error(f"Database initialization failed: {str(e)}")
-                # 테이블이 이미 존재할 경우 계속 진행
                 if "already exists" not in str(e):
                     raise
 
@@ -201,7 +223,8 @@ async def lifespan(app: FastAPI):
             minsize=5,
             maxsize=20,
             auth_plugin="mysql_native_password",
-            charset="utf8mb4"
+            charset="utf8mb4",
+            autocommit=True, 
         )
 
         # Redis 연결
@@ -235,7 +258,7 @@ os.makedirs(original_dir, exist_ok=True)
 os.makedirs(thumbnail_dir, exist_ok=True)
 app.mount("/images/original", StaticFiles(directory=original_dir), name="original-images")
 app.mount("/images/thumbnail", StaticFiles(directory=thumbnail_dir), name="thumbnail-images")
-
+app.include_router(clip_router)
 
 
 
@@ -246,6 +269,7 @@ async def get_db():
             yield conn, cursor
 
 security = HTTPBearer(auto_error=False)
+
 
 # JWT 유틸리티 
 def create_access_token(user_id: str) -> str:
@@ -279,33 +303,6 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     except jwt.JWTError as e:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(e))
 
-@app.post("/items/localDelete", status_code=200)
-async def local_delete(request: localDelete, user: dict = Depends(get_current_user), db=Depends(get_db)):
-    conn, cursor = db
-    user_id = user["user_id"]
-    try:
-        # 해당 아이템이 본인의 것인지 확인
-        await cursor.execute(
-            "SELECT shared FROM clipboard WHERE id = %s AND user_id = %s",
-            (request.item_id, user_id)
-        )
-        result = await cursor.fetchone()
-        if not result:
-            raise HTTPException(status_code=404, detail="Item not found or unauthorized")
-        if result["shared"] == "cloud":
-            return {"message": "Already in cloud"}
-
-        # shared 상태 변경
-        await cursor.execute(
-            "UPDATE clipboard SET shared = 'cloud' WHERE id = %s AND user_id = %s",
-            (request.item_id, user_id)
-        )
-        await conn.commit()
-        return {"message": "shared info changed"}
-    except Exception as e:
-        await conn.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to update shared status: {e}")
-
 # 엔드포인트 
 @app.post("/signup")
 async def signup(user: UserSignupRequest, db=Depends(get_db)):
@@ -313,9 +310,12 @@ async def signup(user: UserSignupRequest, db=Depends(get_db)):
     try:
         await cursor.execute("SELECT user_id FROM user WHERE user_id = %s", (user.user_id,))
         if await cursor.fetchone():
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={"errorCode": "E409", "message": "이미 존재하는 사용자입니다."}
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={
+                    "code": "USER_EXISTS",
+                    "detail": "이미 존재하는 사용자 ID입니다."
+                }
             )
 
         hashed_pw = bcrypt.hashpw(user.password.encode(), bcrypt.gensalt()).decode()
@@ -346,10 +346,7 @@ async def login(user: UserLoginRequest, db=Depends(get_db)):
         result = await cursor.fetchone()
 
         if not result or not bcrypt.checkpw(user.password.encode(), result["password"].encode()):
-            return JSONResponse(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                content={"errorCode": "E401", "detail": "아이디 또는 비밀번호가 잘못되었습니다."}
-            )
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
 
         # 토큰 생성
@@ -371,12 +368,13 @@ async def login(user: UserLoginRequest, db=Depends(get_db)):
             "token_type": "bearer"
         }
 
+    except HTTPException as e:
+        logger.warning(f"Login failed with HTTP error: {e.detail}")
+        raise e  # 꼭 다시 던져야 FastAPI가 제대로 처리
+
     except Exception as e:
-        logger.error("Login failed", exc_info=e)
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"errorCode": "E610", "detail": "로그인 처리 중 오류가 발생했습니다."}
-        )
+        logger.error("Unexpected error during login", exc_info=e)
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error")
 
 @app.post("/refresh", dependencies=[Depends(RateLimiter(times=5, minutes=1))])
 async def refresh_token(request: RefreshTokenRequest, db=Depends(get_db)):
@@ -529,8 +527,8 @@ async def create_item(item: ItemCreate, user: Dict = Depends(get_current_user), 
         await delete_oldest_item_if_full(user_id, max_count_cloud, conn, cursor)
         await cursor.execute(
             """
-            INSERT INTO clipboard (id, user_id, content, type, format, created_at, shared)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO clipboard (id, user_id, content, type, format, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
             """,
             (
                 item.id,
@@ -539,80 +537,148 @@ async def create_item(item: ItemCreate, user: Dict = Depends(get_current_user), 
                 item.type,
                 item.format,
                 item.created_at,
-                'local'
             )
         )
         await conn.commit()
-
+        await manager.broadcast(user_id, json.dumps({
+            "event": "item_added",
+            "data_id": item.id,
+            "timestamp": int(datetime.now().timestamp())
+        }))
         return item.model_dump()
 
     except Exception as e:
         await conn.rollback()
         logger.error("Item creation failed", exc_info=e)
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR)
- 
-@app.post("/tags", response_model=TagResponse)
-async def create_or_get_tag(tag: TagCreate, db=Depends(get_db)):
-    conn, cursor = db
-    try:
-        # 기존 태그 확인
-        await cursor.execute(
-            "SELECT tag_id FROM tag WHERE name = %s AND source = %s",
-            (tag.name, tag.source)
-        )
-        existing = await cursor.fetchone()
-        
-        if existing:
-            return {**tag.model_dump(), "tag_id": existing["tag_id"]}
-            
-        # 새 태그 생성
-        await cursor.execute(
-            "INSERT INTO tag (tag_id, name, source) VALUES (%s, %s, %s)",
-            (tag.tag_id, tag.name, tag.source)
-        )
-        await conn.commit()
-        return tag.model_dump()
-        
-    except aiomysql.IntegrityError as e:
-        await conn.rollback()
-        if "Duplicate entry" in str(e):
-            raise HTTPException(400, "Tag ID already exists")
-        raise
-    except Exception as e:
-        await conn.rollback()
-        logger.error(f"Tag creation failed: {str(e)}")
-        raise HTTPException(500, "Internal server error")
+    
 
-# 2. 데이터-태그 연결 엔드포인트
-@app.post("/data-tags")
-async def create_data_tag(dt: DataTagCreate, db=Depends(get_db)):
+@app.post("/tags")
+async def create_tag_and_link(dt: TagCreateAndLink, db=Depends(get_db)):
     conn, cursor = db
     try:
-        # 데이터 및 태그 존재 여부 확인
+        # 1. data_id 유효성 확인
         await cursor.execute("SELECT id FROM clipboard WHERE id = %s", (dt.data_id,))
         if not await cursor.fetchone():
             raise HTTPException(404, "Data not found")
-            
-        await cursor.execute("SELECT tag_id FROM tag WHERE tag_id = %s", (dt.tag_id,))
-        if not await cursor.fetchone():
-            raise HTTPException(404, "Tag not found")
-            
-        # 연결 생성
+
+        # 2. 동일한 (name, source) 태그가 있는지 확인
         await cursor.execute(
-            "INSERT INTO data_tag (data_id, tag_id) VALUES (%s, %s)",
-            (dt.data_id, dt.tag_id)
+            "SELECT tag_id FROM tag WHERE name = %s AND source = %s",
+            (dt.name, dt.source)
         )
+        tag = await cursor.fetchone()
+
+        if tag:
+            tag_id = tag["tag_id"]
+        else:
+            # 3. 새 태그 생성
+            tag_id = str(uuid.uuid4())
+            await cursor.execute(
+                "INSERT INTO tag (tag_id, name, source) VALUES (%s, %s, %s)",
+                (tag_id, dt.name, dt.source)
+            )
+
+        # 4. data_tag 연결 시도
+        try:
+            await cursor.execute(
+                "INSERT INTO data_tag (data_id, tag_id) VALUES (%s, %s)",
+                (dt.data_id, tag_id)
+            )
+        except aiomysql.IntegrityError:
+            # 이미 연결된 경우는 무시 가능
+            pass
+
         await conn.commit()
-        return {"message": "Data-Tag association created"}
-        
-    except aiomysql.IntegrityError:
-        await conn.rollback()
-        raise HTTPException(400, "Association already exists")
+        return {
+            "tag_id": tag_id,
+            "name": dt.name,
+            "source": dt.source,
+            "message": "Tag linked successfully"
+        }
+
+    except HTTPException:
+        raise
     except Exception as e:
         await conn.rollback()
-        logger.error(f"Data-Tag creation failed: {str(e)}")
+        logger.error(f"Tag link failed: {str(e)}")
         raise HTTPException(500, "Internal server error")
+ 
+# @app.post("/tags", response_model=TagResponse)
+# async def create_or_get_tag(tag: TagCreate, db=Depends(get_db)):
+#     conn, cursor = db
+#     try:
+#         # 기존 태그 확인
+#         await cursor.execute(
+#             "SELECT tag_id FROM tag WHERE name = %s AND source = %s",
+#             (tag.name, tag.source)
+#         )
+#         existing = await cursor.fetchone()
+        
+#         if existing:
+#             return {
+#                 "tag_id": existing["tag_id"],
+#                 "name": tag.name,
+#                 "source": tag.source
+#             }
+
+#         # 새 태그 생성 (tag_id가 전달되지 않았다면 새로 생성)
+#         new_tag_id = getattr(tag, "tag_id", None) or str(uuid4())
+
+#         await cursor.execute(
+#             "INSERT INTO tag (tag_id, name, source) VALUES (%s, %s, %s)",
+#             (new_tag_id, tag.name, tag.source)
+#         )
+#         await conn.commit()
+
+#         return {
+#             "tag_id": new_tag_id,
+#             "name": tag.name,
+#             "source": tag.source
+#         }
+
+#     except aiomysql.IntegrityError as e:
+#         await conn.rollback()
+#         if "Duplicate entry" in str(e):
+#             raise HTTPException(400, "Tag ID already exists")
+#         raise
+#     except Exception as e:
+#         await conn.rollback()
+#         logger.error(f"Tag creation failed: {str(e)}")
+#         raise HTTPException(500, "Internal server error")
+
+# # 2. 데이터-태그 연결 엔드포인트
+# @app.post("/data-tags")
+# async def create_data_tag(dt: DataTagCreate, db=Depends(get_db)):
+#     conn, cursor = db
+#     try:
+#         # 데이터 및 태그 존재 여부 확인
+#         await cursor.execute("SELECT id FROM clipboard WHERE id = %s", (dt.data_id,))
+#         if not await cursor.fetchone():
+#             raise HTTPException(404, "Data not found")
+            
+#         await cursor.execute("SELECT tag_id FROM tag WHERE tag_id = %s", (dt.tag_id,))
+#         if not await cursor.fetchone():
+#             raise HTTPException(404, "Tag not found")
+            
+#         # 연결 생성
+#         await cursor.execute(
+#             "INSERT INTO data_tag (data_id, tag_id) VALUES (%s, %s)",
+#             (dt.data_id, dt.tag_id)
+#         )
+#         await conn.commit()
+#         return {"message": "Data-Tag association created"}
+        
+#     except aiomysql.IntegrityError:
+#         await conn.rollback()
+#         raise HTTPException(400, "Association already exists")
+#     except Exception as e:
+#         await conn.rollback()
+#         logger.error(f"Data-Tag creation failed: {str(e)}")
+#         raise HTTPException(500, "Internal server error")
     
+from api.clip_api import vectorize_image_by_path, delete_image_vector
+
 @app.post("/items/image")
 async def upload_image(
     file: UploadFile = File(...),
@@ -687,10 +753,10 @@ async def upload_image(
         # Database operations
         await cursor.execute(
             """
-            INSERT INTO clipboard (id, user_id, content, type, format, created_at, shared)
-            VALUES (%s, %s, %s, 'img', %s, %s, %s)
+            INSERT INTO clipboard (id, user_id, content, type, format, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
             """,
-            (id, user_id, original_url, format, created_at, 'local')  # content 필드에 URL 저장 추천
+            (id, user_id, original_url, 'img', format, created_at)
         )
 
         await cursor.execute(
@@ -702,6 +768,23 @@ async def upload_image(
         )
 
         await conn.commit()
+        await manager.broadcast(user_id, json.dumps({
+            "event": "item_added",
+            "data_id": id,
+            "timestamp": int(datetime.now().timestamp())
+        }))
+
+        
+        try:
+            # 동기 함수를 비동기 컨텍스트에서 실행
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None, 
+                lambda: vectorize_image_by_path(user_id, id, original_path)
+            )
+        except Exception as e:
+            logger.error(f"Vectorization failed: {str(e)}")
+
         return JSONResponse(
             status_code=status.HTTP_201_CREATED,
             content={"id": id, "message": "Image uploaded successfully"}
@@ -718,6 +801,20 @@ async def upload_image(
         logger.error(f"Image upload failed: {str(e)}")
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+def delete_file_if_exists_by_url(url_path: str, base_dir: str):
+    """정적 URL을 파일 경로로 변환 후 삭제"""
+    if not url_path:
+        return
+    filename = os.path.basename(url_path)
+    abs_path = os.path.join(base_dir, filename)
+    if os.path.exists(abs_path):
+        try:
+            os.remove(abs_path)
+            print(f"Deleted file: {abs_path}")
+        except Exception as e:
+            print(f"Failed to delete file {abs_path}: {e}")
+
+
  # 클립보드 데이터 삭제
 @app.delete("/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_item(
@@ -727,31 +824,45 @@ async def delete_item(
 ):
     conn, cursor = db
     try:
-        # ON DELETE CASCADE로 인해 연관 데이터 자동 삭제
         await cursor.execute(
-            "DELETE FROM clipboard WHERE id = %s",
+            "SELECT user_id FROM clipboard WHERE id = %s",
             (item_id,)
         )
-        
-        if cursor.rowcount == 0:
-            raise HTTPException(
-                status.HTTP_404_NOT_FOUND,
-                detail=f"Item {item_id} not found"
-            )
-            
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Item {item_id} not found")
+        if row["user_id"] != user["user_id"]:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, detail="You are not allowed to delete this item")
+
+        await cursor.execute("SELECT file_path, thumbnail_path FROM image_meta WHERE data_id = %s", (item_id,))
+        image_row = await cursor.fetchone()
+
+        await cursor.execute("DELETE FROM clipboard WHERE id = %s", (item_id,))
         await conn.commit()
-        
+        await manager.broadcast(user["user_id"], json.dumps({
+            "event": "item_deleted",
+            "data_id": item_id,
+            "timestamp": int(datetime.now().timestamp())
+        }))
     except HTTPException:
         await conn.rollback()
         raise
-        
+
     except Exception as e:
         await conn.rollback()
         logger.error(f"Item deletion failed: {str(e)}")
-        raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Item deletion failed"
-        )
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Item deletion failed")
+    if image_row:
+        delete_file_if_exists_by_url(image_row["file_path"], original_dir)
+        delete_file_if_exists_by_url(image_row["thumbnail_path"], thumbnail_dir)
+
+    # 커밋 후 벡터 삭제 – 실패해도 에러로 안 넘김
+    try:
+        loop = asyncio.get_running_loop()
+        logger.info(f"A")
+        await loop.run_in_executor(None, lambda: delete_image_vector(user["user_id"], item_id))
+    except Exception as e:
+        logger.error(f"Vector deletion failed: {str(e)}")
 
 
 # 사용자 데이터 조회
@@ -760,7 +871,10 @@ async def get_user_clipboard_data(
     user: Dict = Depends(get_current_user), 
     db=Depends(get_db)
 ):
+
     conn, cursor = db
+    await cursor.execute("SELECT DATABASE();")
+    row = await cursor.fetchone()
     try:
         # 클립보드 데이터 + 태그 조회
         await cursor.execute("""
@@ -809,7 +923,7 @@ async def get_user_clipboard_data(
                 "image_meta": image_meta
             })
             
-        return data_list
+        return JSONResponse(content=data_list, headers={"Cache-Control": "no-store"})
         
     except Exception as e:
         logger.error(f"Data fetch failed: {str(e)}")
@@ -913,8 +1027,76 @@ async def get_image_file(
     except Exception as e:
         logger.error(f"Image fetch failed: {str(e)}")
         raise HTTPException(500, "Internal server error")
+    
 
-# 에러 핸들러 (기존과 동일)
+
+@app.post("/search-text")
+async def search_similar_images(
+    data: TextSearchRequest,
+    user: Dict = Depends(get_current_user),
+    db=Depends(get_db)
+):
+    query = data.query
+    user_id = user["user_id"]
+    logger.info(f"CLIP 검색 요청 query: {query}")
+
+    try:
+        # KoCLIP 텍스트 임베딩
+        vec = encode_text(query)
+        vec = vec.tolist()
+
+        # 이미 정의된 index 객체 사용
+        result = index.query(
+            #user_id= user_id,
+            vector=vec,
+            top_k=10,
+            include_metadata=True
+        )
+
+        # 유효한 ID만 필터링
+        matches = result.get("matches", [])
+        image_ids = [m.get("id") for m in matches if m.get("id") is not None]
+
+        if not image_ids:
+            return {"query": query, "results": []}
+
+        # DB 연결
+        conn, cursor = db
+        placeholders = ",".join(["%s"] * len(image_ids))
+        query_sql = f"""
+            SELECT c.id
+            FROM clipboard c
+            WHERE c.user_id = %s
+            AND c.id IN ({placeholders})
+        """
+        params = [user_id] + image_ids
+        await cursor.execute(query_sql, params)
+        rows = await cursor.fetchall()
+
+        found_map = {row["id"]: True for row in rows}
+
+        # 5. Pinecone 순서 기준으로 필터링 및 정렬
+        ordered_ids = [id for id in image_ids if id in found_map]
+
+        return {
+            "query": query,
+            "ids": ordered_ids
+        }
+
+    except Exception as e:
+        logger.error(f"Text search failed: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")
+    
+@app.websocket("/ws/{user_id}")
+async def websocket_endpoint(websocket: WebSocket, user_id: str):
+    await manager.connect(user_id, websocket)
+    try:
+        while True:
+            await websocket.receive_text()  # or just keep alive
+    except:
+        manager.disconnect(user_id, websocket)
+
+# 에러 핸들러 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request, exc):
     logger.error(f"HTTP error {exc.status_code}: {exc.detail}")
@@ -930,3 +1112,4 @@ async def validation_exception_handler(request, exc):
         status_code=422,
         content={"detail": exc.errors()},
     )
+

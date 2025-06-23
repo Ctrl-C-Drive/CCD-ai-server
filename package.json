@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "typing": "^0.1.9",
     "uuid": "^11.1.0"
   }
 }
