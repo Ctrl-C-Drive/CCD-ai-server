@@ -1,8 +1,12 @@
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 from icrawler.builtin import GoogleImageCrawler, BingImageCrawler
 from mobilenetv3.Classes import CLASSES
 import os
 
-KEYWORDS = ["기타"]
+KEYWORDS = ["개"]
 SAVE_DIR = "dataset_raw"
 TARGET_PER_CLASS = 200
 MAX_TRIES_PER_KEYWORD = 1  # 각 키워드당 최대 1회 크롤링
@@ -28,10 +32,7 @@ for cls in KEYWORDS:
     remaining = TARGET_PER_CLASS - current_count
 
     keywords = [
-        cls,
-        cls + " 이미지",
-        cls + " 사진",
-        cls + " wallpaper"
+        cls + "사진"
     ]
 
     for keyword in keywords:
