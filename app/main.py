@@ -306,7 +306,13 @@ async def signup(user: UserSignupRequest, db=Depends(get_db)):
     try:
         await cursor.execute("SELECT user_id FROM user WHERE user_id = %s", (user.user_id,))
         if await cursor.fetchone():
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "User ID exists")
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={
+                    "code": "USER_EXISTS",
+                    "detail": "이미 존재하는 사용자 ID입니다."
+                }
+            )
 
         hashed_pw = bcrypt.hashpw(user.password.encode(), bcrypt.gensalt()).decode()
         await cursor.execute(
@@ -525,7 +531,6 @@ async def create_item(item: ItemCreate, user: Dict = Depends(get_current_user), 
             )
         )
         await conn.commit()
-        logger.info(f"[broadcast 호출됨] item_added", user_id, item.id)
         await manager.broadcast(user_id, json.dumps({
             "event": "item_added",
             "data_id": item.id,
@@ -754,6 +759,12 @@ async def upload_image(
         )
 
         await conn.commit()
+        await manager.broadcast(user_id, json.dumps({
+            "event": "item_added",
+            "data_id": id,
+            "timestamp": int(datetime.now().timestamp())
+        }))
+
         
         try:
             # 동기 함수를 비동기 컨텍스트에서 실행
