@@ -19,5 +19,5 @@ def generate_json(root_dir, output_filename):
         json.dump(tag_map, f, ensure_ascii=False, indent=2)
 
 if __name__ == "__main__":
-    generate_json("dataset", "multitag_train.json")
+    generate_json("dataset", "multitag_train_newnew.json")
     print("✅ 저장 완료")
