@@ -28,7 +28,7 @@ transform = transforms.Compose([
 # 데이터셋
 train_ds = MultiLabelDataset(
     image_dir="dataset",
-    json_path="multitag_train.json",
+    json_path="multitag_train_newnew.json",
     transform=transform
 )
 
@@ -58,11 +58,11 @@ for epoch in range(EPOCHS):
     print(f"[Epoch {epoch+1}/{EPOCHS}] Loss: {running_loss:.4f}")
 
 # 모델 저장
-torch.save(model.state_dict(), "mobilenetv3_trained_new.pth")
+torch.save(model.state_dict(), "mobilenetv3_trained_newnew.pth")
 
 # ONNX 저장
 dummy_input = torch.randn(1, 3, 224, 224).to(DEVICE)
-torch.onnx.export(model, dummy_input, "mobilenetv3_trained_new.onnx",
+torch.onnx.export(model, dummy_input, "mobilenetv3_trained_newnew.onnx",
                   input_names=["input"], output_names=["output"],
                   export_params=True, opset_version=11)
 
