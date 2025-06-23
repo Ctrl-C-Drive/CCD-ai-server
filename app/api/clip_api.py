@@ -77,11 +77,12 @@ def delete_image_vector(user_id: str, image_uuid: str):
 
         # metadata에서 user_id 확인
         stored_user_id = vector_data["metadata"].get("userid")
+        if stored_user_id != user_id:
+            return {"error": f"User ID mismatch: stored_user_id={stored_user_id}, provided_user_id={user_id}"}
 
-        # user_id가 일치하면 삭제
-        if stored_user_id == user_id:
-            index.delete(ids=[image_uuid])
-            return {"message": f"{image_uuid} deleted from Pinecone"}
+        # user_id가 일치하면 image_uuid 삭제
+        index.delete(ids=[image_uuid])
+        return {"message": f"{image_uuid} deleted from Pinecone"}
     except Exception as e:
         return {"error": f"Failed to delete vector: {str(e)}"}
 
