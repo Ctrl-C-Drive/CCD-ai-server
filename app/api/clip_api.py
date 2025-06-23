@@ -70,20 +70,27 @@ def delete_image_vector(user_id: str, image_uuid: str):
     try:
         # Pinecone에서 해당 벡터의 metadata 가져오기
         result = index.fetch(ids=[image_uuid])
-        vector_data = result["vectors"].get(image_uuid)
+        print(f"Fetch result: {result}")  # ✅ Fetch 결과 출력
+        vector_data = result.vectors.get(image_uuid)  # ✅ FetchResponse 객체에서 vectors 속성 사용
 
         if not vector_data:
+            print(f"Vector with ID {image_uuid} not found in Pinecone")  # ✅ 문제 확인
             return {"error": f"Vector with ID {image_uuid} not found in Pinecone"}
 
         # metadata에서 user_id 확인
-        stored_user_id = vector_data["metadata"].get("userid")
-        if stored_user_id != user_id:
-            return {"error": f"User ID mismatch: stored_user_id={stored_user_id}, provided_user_id={user_id}"}
+        stored_user_id = vector_data.metadata.get("userid")
+        print(f"Stored user_id: {stored_user_id}, Provided user_id: {user_id}")  # ✅ user_id 확인
 
-        # user_id가 일치하면 image_uuid 삭제
-        index.delete(ids=[image_uuid])
-        return {"message": f"{image_uuid} deleted from Pinecone"}
+        # user_id가 일치하면 삭제
+        if stored_user_id == user_id:
+            index.delete(ids=[image_uuid])
+            print(f"✅ Successfully deleted vector: {image_uuid}")  # ✅ 삭제 성공 메시지
+            return {"message": f"{image_uuid} deleted from Pinecone"}
+        else:
+            print(f"User ID mismatch: stored_user_id={stored_user_id}, provided_user_id={user_id}")  # ✅ 불일치 확인
+            return {"error": f"User ID mismatch: stored_user_id={stored_user_id}, provided_user_id={user_id}"}
     except Exception as e:
+        print(f"❌ Failed to delete vector: {str(e)}")  # ✅ 에러 메시지 출력
         return {"error": f"Failed to delete vector: {str(e)}"}
 
 # 5. record 전체 삭제 함수

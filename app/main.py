@@ -525,6 +525,7 @@ async def create_item(item: ItemCreate, user: Dict = Depends(get_current_user), 
             )
         )
         await conn.commit()
+        logger.info(f"[broadcast 호출됨] item_added", user_id, item.id)
         await manager.broadcast(user_id, json.dumps({
             "event": "item_added",
             "data_id": item.id,
@@ -838,6 +839,7 @@ async def delete_item(
     # 커밋 후 벡터 삭제 – 실패해도 에러로 안 넘김
     try:
         loop = asyncio.get_running_loop()
+        logger.info(f"A")
         await loop.run_in_executor(None, lambda: delete_image_vector(user["user_id"], item_id))
     except Exception as e:
         logger.error(f"Vector deletion failed: {str(e)}")
