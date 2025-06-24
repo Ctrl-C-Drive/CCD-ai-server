@@ -13,7 +13,7 @@ import onnx
 
 # 설정
 BATCH_SIZE = 32  # 한번에 학습할 이미지 수
-EPOCHS = 10  # 전체 데이터셋 반복 학습할 횟수수
+EPOCHS = 10  # 전체 데이터셋 반복 학습할 횟수
 NUM_CLASSES = len(CLASSES)
 DEVICE = torch.device("cpu")  # CPU로 학습 진행
 
@@ -58,11 +58,11 @@ for epoch in range(EPOCHS):
     print(f"[Epoch {epoch+1}/{EPOCHS}] Loss: {running_loss:.4f}")
 
 # 모델 저장
-torch.save(model.state_dict(), "mobilenetv3_trained_newnew.pth")
+torch.save(model.state_dict(), "mobilenetv3_trained_newnewnew.pth")
 
 # ONNX 저장
 dummy_input = torch.randn(1, 3, 224, 224).to(DEVICE)
-torch.onnx.export(model, dummy_input, "mobilenetv3_trained_newnew.onnx",
+torch.onnx.export(model, dummy_input, "mobilenetv3_trained_newnewnew.onnx",
                   input_names=["input"], output_names=["output"],
                   export_params=True, opset_version=11)
 

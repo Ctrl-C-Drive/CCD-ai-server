@@ -9,8 +9,8 @@ from torchvision import transforms
 from mobilenetv3.Classes import CLASSES
 
 # 설정
-MODEL_PATH = "mobilenetv3_trained_newnew.onnx"
-IMAGE_PATH = "C:/Users/parks/Desktop/jonjal.jpg"  # ✅ 테스트할 이미지 경로
+MODEL_PATH = "mobilenetv3_trained_newnewnew.onnx"
+IMAGE_PATH = "C:/Users/parks/Desktop/baseball.jpg"  # ✅ 테스트할 이미지 경로
 
 THRESHOLD = 0.5  # 다중 태깅 확률 기준값
 
