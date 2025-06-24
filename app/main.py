@@ -332,7 +332,7 @@ async def login(user: UserLoginRequest, db=Depends(get_db)):
     conn, cursor = db
     try:
         await cursor.execute(
-            "SELECT password FROM user WHERE user_id = %s",
+            "SELECT password, max_count_cloud FROM user WHERE user_id = %s",
             (user.user_id,)
         )
         result = await cursor.fetchone()
@@ -356,7 +356,8 @@ async def login(user: UserLoginRequest, db=Depends(get_db)):
         return {
             "access_token": access_token,
             "refresh_token": refresh_token,
-            "token_type": "bearer"
+            "token_type": "bearer",
+            "max_count_cloud": result["max_count_cloud"] 
         }
 
     except HTTPException as e:
